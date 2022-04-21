@@ -1,0 +1,404 @@
+#!/bin/bash
+
+export POSIXLY_CORRECT=yes
+export LC_ALL=C
+
+NEW_LINE=$'\n'
+print_help()
+{
+    echo "Usage: corona [-h]"
+    echo "       corona [FILTERS] [COMMAND] [LOG [LOG2 [...]]]\n"
+    echo "COMMAND může být jeden z:\n"
+    echo "       infected  — spočítá počet nakažených."
+    echo "       merge     — sloučí několik souborů se záznamy do jednoho, zachovávající původní pořadí (hlavička bude ve výstupu jen jednou)."
+    echo "       gender    — vypíše počet nakažených pro jednotlivá pohlaví."
+    echo "       age       — vypíše statistiku počtu nakažených osob dle věku (bližší popis je níže)."
+    echo "       daily     — vypíše statistiku nakažených osob pro jednotlivé dny."
+    echo "       monthly   — vypíše statistiku nakažených osob pro jednotlivé měsíce."
+    echo "       yearly    — vypíše statistiku nakažených osob pro jednotlivé roky."
+    echo "       countries — vypíše statistiku nakažených osob pro jednotlivé země nákazy (bez ČR, tj. kódu CZ)."
+    echo "       districts — vypíše statistiku nakažených osob pro jednotlivé okresy.\n"
+    echo "FILTERS může být kombinace následujících (každý maximálně jednou):\n"
+    echo "       -a DATETIME — after: jsou uvažovány pouze záznamy PO tomto datu (včetně tohoto data). DATETIME je formátu YYYY-MM-DD."
+    echo "       -b DATETIME — before: jsou uvažovány pouze záznamy PŘED tímto datem (včetně tohoto data)."
+    echo "       -g GENDER   — jsou uvažovány pouze záznamy nakažených osob daného pohlaví. GENDER může být M (muži) nebo Z (ženy)."
+    echo "       -s [WIDTH]    u příkazů gender, age, daily, monthly, yearly, countries, districts a regions vypisuje data ne číselně, ale graficky v podobě histogramů."
+    echo "                     Nepovinný parametr WIDTH nastavuje šířku histogramů, tedy délku nejdelšího řádku, na WIDTH. Tedy, WIDTH musí být kladné celé číslo."
+    echo "                     Pokud není parametr WIDTH uveden, řídí se šířky řádků požadavky uvedenými níže.\n"
+    echo "-h — vypíše nápovědu s krátkým popisem každého příkazu a přepínače."
+}
+
+infected=false
+merge=false
+gender=false
+age=false
+daily=false
+monthly=false
+yearly=false
+countries=false
+districts=false
+regions=false
+
+COMMAND=""
+LOG_FILES=""
+GZ_LOG_FILES=""
+
+
+while [ "$(echo "$1" | head -c 1)" = "-" ]; do
+    case $1 in
+        -a )
+            if [ "$after" != "" ]; then
+                echo ERROR: Repeating filter!
+                exit 1
+            fi
+            shift
+            if [ "$1" = "" ]; then
+                echo ERROR: Incorrect input!
+                exit 1
+            fi
+            after=$1
+        
+            ;;
+        -b )
+            if [ "$before" != "" ]; then
+                echo ERROR: Repeating filter!
+                exit 1
+            fi
+            shift
+            if [ "$1" = "" ]; then
+                echo ERROR: Incorrect input!
+                exit 1
+            fi
+            before=$1
+            
+            ;;
+        -g)
+            if [ "$gender_filter" != "" ]; then
+                echo ERROR: Repeating filter!
+                exit 1
+            fi
+            shift
+            if [ "$1" = "" ]; then
+                echo ERROR: Incorrect input!
+                exit 1
+            fi
+            gender_filter=$1
+            if [ "$gender_filter" != "M" -a "$gender_filter" != "Z" ]; then
+                echo ERROR: Incorrect input!
+                exit 1
+            fi
+
+            ;;
+
+        -s)
+
+            if [ "$width" != "" ]; then
+                echo ERROR: Repeating filter!
+                exit 1
+            fi
+            shift
+
+            case $1 in
+                ''|*[!0-9]*) 
+                    not_number=true
+                    ;;
+                *) 
+                    width=$1
+                    ;;
+            esac
+            ;;
+
+        -h) 
+            print_help
+            exit 0
+            ;;  
+        
+        esac
+        if [ "$not_number" != true ]; then
+            shift
+        else
+            not_number=""
+        fi
+    done
+
+
+case $1 in
+    infected )
+        infected=true
+        shift
+        ;;
+    merge )
+        merge=true
+        shift
+        ;;
+    gender )
+        gender=true
+        shift
+        ;;
+    age ) 
+        age=true
+        shift
+        ;;
+    daily ) 
+        daily=true
+        shift
+        ;;
+    monthly )
+        monthly=true
+        shift
+        ;;
+    yearly ) 
+        yearly=true
+        shift
+        ;;
+    countries )
+        countries=true
+        shift
+        ;;
+    districts )
+        districts=true
+        shift
+        ;;
+    regions )
+        regions=true
+        shift
+        ;;
+    *)
+        merge=true
+        ;;
+
+esac
+
+INPUT=""
+INPUT_WHEAD=""
+head=""
+OUTPUT=""
+CHECKFILE=false
+while [ "$1" != "" ]; do
+	CHECKFILE=true
+	if [ ! -f "$1" ]; then
+		echo ERROR: Log argument is not a file!
+		exit 1
+	fi
+	case $1 in
+		*.gz )
+			tempINPUT=$(zcat "$1")
+			;;
+        *.bz2 )
+            tempINPUT=$(bzcat "$1")
+            ;;
+		* )
+			tempINPUT=$(cat "$1")
+			;;
+        
+	esac
+    head="id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"     #hlavicka
+    tempINPUT="$(echo "$tempINPUT" | tail -n +2)"   #input bez hlavicky
+    INPUT_WHEAD="${INPUT_WHEAD}${tempINPUT}${NEW_LINE}"   #input bez hlavicky
+    if [ "$INPUT" == "" ]; then
+        INPUT="${head}${NEW_LINE}${tempINPUT}"
+    else
+        INPUT="${INPUT}${NEW_LINE}${tempINPUT}"
+    fi 
+    shift
+
+done
+
+if [ $CHECKFILE = false ]; then
+    tempINPUT=$(cat)
+    if [ "$tempINPUT" = "" ]; then
+        head="id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"
+        INPUT_WHEAD="" 
+        INPUT="${head}"
+    else
+        head="id,datum,vek,pohlavi,kraj_nuts_kod,okres_lau_kod,nakaza_v_zahranici,nakaza_zeme_csu_kod,reportovano_khs"$NEW_LINE
+        tempINPUT="$(echo "$tempINPUT" | tail -n +2)"
+        INPUT_WHEAD=${tempINPUT}  
+        INPUT="${head}${tempINPUT}"
+    fi
+    
+fi
+
+
+
+#filters
+
+if [ "$gender_filter" = "M" ]; then
+    gender_filterM=$(echo "$INPUT" | awk -F, '$4 == "M"')
+    INPUT="${head}${NEW_LINE}${gender_filterM}"
+    INPUT_WHEAD="${gender_filterM}"
+fi
+
+if [ "$gender_filter" = "Z" ]; then
+    gender_filterZ=$(echo "$INPUT" | awk -F, '$4 == "Z"')
+    INPUT="${head}${NEW_LINE}${gender_filterZ}"
+    INPUT_WHEAD="${gender_filterZ}"
+fi
+
+#COMMANDS
+
+if [ $infected = true ]; then
+    infected=$(echo "$INPUT_WHEAD") 
+    echo "$(( $(echo "$infected" | wc -l)))"
+fi
+
+if [ $merge == true ]; then 
+    echo "$INPUT"
+fi
+
+if [ $gender = true ]; then
+    gender_none=$(echo "$INPUT_WHEAD" | awk -F, '$4 == ""')
+    if [ $(echo "$gender_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        gender_list=$(echo "$INPUT_WHEAD" | awk -F, '{print $4}')
+        gender_sort=$(echo "$gender_list" | sort)
+        gender=$(echo "$gender_sort" | uniq -c )
+        gender=$(echo "$gender" | tail -n +2)
+        printf "$(echo "$gender" | awk '{print $2 ": "$1}')\n"
+        printf "None: $(( $(echo "$gender_none" | awk 'NF'| wc -l )))\n"
+    else
+        gender_list=$(echo "$INPUT_WHEAD" | awk -F, '{print $4}')
+        gender_sort=$(echo "$gender_list" | sort)
+        gender=$(echo "$gender_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$gender" | awk '{print $2 ": "$1}')\n"
+    fi
+    
+fi
+
+if [ $age = true ]; then
+    sum_0_5=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 0 && $3 <= 5')
+    printf "0-5   : $(( $(echo "$sum_0_5" | awk 'NF'| wc -l )))\n"
+    sum_6_15=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 6 && $3 <= 15')
+    printf "6-15  : $(( $(echo "$sum_6_15" | awk 'NF'| wc -l )))\n"
+    sum_16_25=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 16 && $3 <= 25')
+    printf "16-25 : $(( $(echo "$sum_16_25" | awk 'NF'| wc -l )))\n"
+    sum_26_35=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 26 && $3 <= 35')
+    printf "26-35 : $(( $(echo "$sum_26_35" | awk 'NF'| wc -l )))\n"
+    sum_36_45=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 36 && $3 <= 45')
+    printf "36-45 : $(( $(echo "$sum_36_45" | awk 'NF'| wc -l )))\n"
+    sum_46_55=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 46 && $3 <= 55')
+    printf "46-55 : $(( $(echo "$sum_46_55" | awk 'NF'| wc -l )))\n"
+    sum_56_65=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 56 && $3 <= 65')
+    printf "56-65 : $(( $(echo "$sum_56_65" | awk 'NF'| wc -l )))\n"
+    sum_66_75=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 66 && $3 <= 75')
+    printf "66-75 : $(( $(echo "$sum_66_75" | awk 'NF'| wc -l )))\n"
+    sum_76_85=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 76 && $3 <= 85')
+    printf "76-85 : $(( $(echo "$sum_76_85" | awk 'NF'| wc -l )))\n"
+    sum_86_95=$(echo "$INPUT_WHEAD"  | awk -F, '$3 >= 86 && $3 <= 95')
+    printf "86-95 : $(( $(echo "$sum_86_95" | awk 'NF'| wc -l )))\n"
+    sum_96_105=$(echo "$INPUT_WHEAD"  |awk -F, '$3 >= 96 && $3 <= 105')
+    printf "96-105: $(( $(echo "$sum_96_105" | awk 'NF'| wc -l )))\n"
+    sum_gt105=$(echo "$INPUT_WHEAD"  | awk -F, '$3 > 105')
+    printf ">105  : $(( $(echo "$sum_gt105" | awk 'NF'| wc -l )))\n"
+    sum_none=$(echo "$INPUT_WHEAD"  | awk -F, '$3 == ""')
+    if [ $(echo "$sum_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        printf "None  : $(( $(echo "$sum_none" | awk 'NF'| wc -l )))\n"
+    fi
+fi
+
+if [ $daily = true ]; then
+    date_none=$(echo "$INPUT_WHEAD"  | awk -F, '$2 == ""')
+    if [ $(echo "$date_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        dates_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $2}')
+        dates_sort=$(echo "$dates_list" | sort) 
+        daily=$(echo "$dates_sort" | uniq -c )
+        date_none=$(echo "$daily" | head -n 1)
+        daily=$(echo "$daily" | tail -n +2)
+        printf "$(echo "$daily" | awk '{print $2 ": "$1}')\n"
+        printf "$(echo "None:"$date_none"" )\n"
+    else
+        dates_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $2}')
+        dates_sort=$(echo "$dates_list" | sort) 
+        daily=$(echo "$dates_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$daily" | awk '{print $2 ": "$1}')\n"
+    fi
+fi
+
+if [ $monthly = true ]; then 
+    months_none=$(echo "$INPUT_WHEAD"  | awk -F, '$2 == ""')
+    if [ $(echo "$months_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        months_substr=$(echo "$INPUT_WHEAD"  | awk -F, -vOFS=, '$2=substr($2,1,7)')
+        months_list=$(echo "$months_substr" | awk -F, '{print $2}')
+        months_sort=$(echo "$months_list" | sort) 
+        monthly=$(echo "$months_sort" | uniq -c )
+        months_list_none=$(echo "$INPUT_WHEAD" | awk -F, '{print $2}')
+        months_sort_none=$(echo "$months_list_none" | sort) 
+        monthly_none=$(echo "$months_sort_none" | uniq -c )
+        months_none=$(echo "$monthly_none" | head -n 1)
+        printf "$(echo "$monthly" | awk '{print $2 ": "$1}')\n"
+        printf "$(echo "None:"$months_none"" )\n"
+    else
+        months_substr=$(echo "$INPUT_WHEAD"  | awk -F, -vOFS=, '$2=substr($2,1,7)')
+        months_list=$(echo "$months_substr" | awk -F, '{print $2}')
+        months_sort=$(echo "$months_list" | sort)
+        monthly=$(echo "$months_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$monthly" | awk '{print $2 ": "$1}')\n"
+    fi
+fi
+
+if [ $yearly = true ]; then 
+    years_none=$(echo "$INPUT_WHEAD"  | awk -F, '$2 == ""')
+    if [ $(echo "$years_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        years_substr=$(echo "$INPUT_WHEAD"  | awk -F, -vOFS=, '$2=substr($2,1,4)')
+        years_list=$(echo "$years_substr" | awk -F, '{print $2}')
+        years_sort=$(echo "$years_list" | sort) 
+        yearly=$(echo "$years_sort" | uniq -c )
+        years_list_none=$(echo "$INPUT_WHEAD" | awk -F, '{print $2}')
+        years_sort_none=$(echo "$years_list_none" | sort) 
+        yearly_none=$(echo "$years_sort_none" | uniq -c )
+        years_none=$(echo "$yearly_none" | head -n 1)
+        printf "$(echo "$yearly" | awk '{print $2 ": "$1}')\n"
+        printf "$(echo "None:"$years_none"" )\n"
+    else
+        years_substr=$(echo "$INPUT_WHEAD"  | awk -F, -vOFS=, '$2=substr($2,1,4)')
+        years_list=$(echo "$years_substr" | awk -F, '{print $2}')
+        years_sort=$(echo "$years_list" | sort)
+        yearly=$(echo "$years_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$yearly" | awk '{print $2 ": "$1}')\n"
+    fi
+fi
+
+
+if [ $countries = true ]; then
+    countries_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $8}')
+    countries_sort=$(echo "$countries_list" | sort)
+    countries_cz=$(echo "$countries_sort" | awk 'NF' | uniq -c )
+    countries_wcz=$(echo "$countries_cz" | sed '/CZ/d')
+    printf "$(echo "$countries_wcz" | awk '{print $2 ": "$1}')\n"
+    
+fi
+
+if [ $districts = true ]; then
+    distr_none=$(echo "$INPUT_WHEAD"  | awk -F, '$6 == ""')
+    if [ $(echo "$distr_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        districts_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $6}')
+        districts_sort=$(echo "$districts_list" | sort) 
+        districts=$(echo "$districts_sort" | uniq -c )
+        districts_none=$(echo "$districts" | head -n 1)
+        districts=$(echo "$districts" | tail -n +2)
+        printf "$(echo "$districts" | awk '{print $2 ": "$1}')\n"
+        printf "$(echo "None:"$districts_none"" )\n"
+    else
+        districts_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $6}')
+        districts_sort=$(echo "$districts_list" | sort) 
+        districts=$(echo "$districts_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$districts" | awk '{print $2 ": "$1}')\n"
+    fi
+fi
+
+if [ $regions = true ]; then
+    regions_none=$(echo "$INPUT_WHEAD"  | awk -F, '$5 == ""')
+    if [ $(echo "$regions_none" | awk 'NF'| wc -l ) -ne 0 ]; then
+        regions_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $5}')
+        regions_sort=$(echo "$regions_list" | sort)
+        regions=$(echo "$regions_sort" | uniq -c )
+        regions_none=$(echo "$regions" | head -n 1)
+        regions=$(echo "$regions" | tail -n +2)
+        printf "$(echo "$regions" | awk '{print $2 ": "$1}')\n"
+        printf "$(echo "None:"$regions_none"" )\n"
+    else
+        regions_list=$(echo "$INPUT_WHEAD"  | awk -F, '{print $5}')
+        regions_sort=$(echo "$regions_list" | sort)
+        regions=$(echo "$regions_sort" | awk 'NF'| uniq -c )
+        printf "$(echo "$regions" | awk '{print $2 ": "$1}')\n"
+    fi
+fi
