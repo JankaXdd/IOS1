@@ -7,3 +7,6 @@ Shell script for the analysis of records of persons with a proven coronavirus in
 $ ./corona /h
 ```
 Prints help with a brief description of each command and switch.
+
+-----------
+Missing -s FILTER.
