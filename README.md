@@ -9,4 +9,4 @@ $ ./corona -h
 Prints help with a brief description of each command and switch.
 
 -----------
-Missing -s FILTER.
+Missing -s FILTER and -a/-b FILTER
